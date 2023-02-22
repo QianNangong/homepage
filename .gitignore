@@ -1,0 +1,5 @@
+**/*.ttf
+/target
+/.token
+/.vscode
+**/.DS_Store
