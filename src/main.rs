@@ -23,7 +23,7 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, InternalError<String>> 
     let reg = Handlebars::new();
     let client = Client::default();
     let resp = client
-        .get("https://v2.jinrishici.com/sentence")
+        .get("http://v2.jinrishici.com/sentence")
         .header("X-User-Token", &state.token)
         .send()
         .await
@@ -119,7 +119,7 @@ async fn main() -> std::io::Result<()> {
         Err(_) => {
             let client = Client::default();
             let resp = client
-                .get("https://v2.jinrishici.com/token")
+                .get("http://v2.jinrishici.com/token")
                 .send()
                 .await
                 .unwrap()
