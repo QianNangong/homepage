@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufReader};
 
 use handlebars::Handlebars;
 use ntex::http::{Client, StatusCode};
 use ntex::web::error::InternalError;
 use ntex::web::{self, App, HttpRequest, HttpResponse, HttpResponseBuilder, HttpServer};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use rusttype::Font;
 use serde_json::{json, Value};
 use svg::Document;
@@ -20,7 +23,7 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, InternalError<String>> 
     let reg = Handlebars::new();
     let client = Client::default();
     let resp = client
-        .get("http://v2.jinrishici.com/sentence")
+        .get("https://v2.jinrishici.com/sentence")
         .header("X-User-Token", &state.token)
         .send()
         .await
@@ -28,6 +31,7 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, InternalError<String>> 
         .json::<HashMap<String, Value>>()
         .await
         .map_err(|e| InternalError::default(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+
     if let Some(Value::Object(data)) = resp.get("data") {
         if let (Some(Value::String(content)), Some(Value::Object(origin))) =
             (data.get("content"), data.get("origin"))
@@ -80,6 +84,34 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, InternalError<String>> 
     Ok(HttpResponseBuilder::new(StatusCode::INTERNAL_SERVER_ERROR).finish())
 }
 
+fn load_rustls_config() -> std::io::Result<ServerConfig> {
+    // init server config builder with safe defaults
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth();
+
+    // load TLS key/cert files
+    let cert_file = &mut BufReader::new(File::open("cert.pem")?);
+    let key_file = &mut BufReader::new(File::open("key.pem")?);
+
+    // convert files to key/cert objects
+    let cert_chain = certs(cert_file)?.into_iter().map(Certificate).collect();
+    let mut keys: Vec<PrivateKey> = pkcs8_private_keys(key_file)?
+        .into_iter()
+        .map(PrivateKey)
+        .collect();
+
+    // exit if no keys could be parsed
+    if keys.is_empty() {
+        eprintln!("Could not locate PKCS 8 private keys.");
+        std::process::exit(1);
+    }
+
+    config
+        .with_single_cert(cert_chain, keys.remove(0))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+}
+
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
     let token = match std::fs::read_to_string(".token") {
@@ -103,9 +135,7 @@ async fn main() -> std::io::Result<()> {
     let font_data = include_bytes!("font.ttf");
     let font = Font::try_from_bytes(font_data).unwrap();
 
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    builder.set_private_key_file("/etc/letsencrypt/live/example.com/privkey.pem", SslFiletype::PEM).unwrap();
-    builder.set_certificate_chain_file("/etc/letsencrypt/live/example.com/fullchain.pem").unwrap();
+    let config = load_rustls_config()?;
 
     HttpServer::new(move || {
         App::new()
@@ -115,7 +145,7 @@ async fn main() -> std::io::Result<()> {
             })
             .route("/", web::get().to(index))
     })
-    .bind_openssl("0.0.0.0:443", builder)?
+    .bind_rustls("0.0.0.0:443", config)?
     .run()
     .await
 }
